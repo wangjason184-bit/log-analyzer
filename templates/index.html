@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Log Analyzer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-white min-h-screen flex items-center justify-center p-6">
+
+  <div class="w-full max-w-2xl">
+
+    <!-- Header -->
+    <div class="text-center mb-10">
+      <h1 class="text-4xl font-bold text-white mb-2">🔍 Log Analyzer</h1>
+      <p class="text-gray-400">Upload a server log file to detect suspicious activity</p>
+    </div>
+
+    <!-- Upload Box -->
+    <div class="bg-gray-900 border-2 border-dashed border-gray-700 rounded-2xl p-10 text-center hover:border-blue-500 transition-colors duration-200">
+      <p class="text-gray-400 mb-4 text-sm">Supports .log and .txt files up to 2MB</p>
+      <input type="file" id="fileInput" accept=".log,.txt"
+        class="block mx-auto text-sm text-gray-400
+               file:mr-4 file:py-2 file:px-6
+               file:rounded-full file:border-0
+               file:text-sm file:font-semibold
+               file:bg-blue-600 file:text-white
+               hover:file:bg-blue-700 cursor-pointer"/>
+      <button onclick="uploadFile()"
+        class="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-8 rounded-full transition-colors duration-200">
+        Analyze Log
+      </button>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading" class="hidden text-center mt-8 text-gray-400">
+      ⏳ Analyzing your log file...
+    </div>
+
+    <!-- Results -->
+    <div id="results" class="hidden mt-8">
+
+      <!-- Summary Bar -->
+      <div id="summary" class="rounded-xl p-4 mb-6 text-center font-semibold text-lg"></div>
+
+      <!-- Alert Cards -->
+      <div id="alertList" class="space-y-4"></div>
+
+    </div>
+
+  </div>
+
+  <script>
+    async function uploadFile() {
+      const fileInput = document.getElementById("fileInput");
+      const file = fileInput.files[0];
+
+      // Make sure a file was selected
+      if (!file) {
+        alert("Please select a file first.");
+        return;
+      }
+
+      // Show loading, hide old results
+      document.getElementById("loading").classList.remove("hidden");
+      document.getElementById("results").classList.add("hidden");
+
+      // Build the form data to send
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        // Send to our Flask backend
+        const response = await fetch("/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await response.json();
+
+        // Hide loading, show results
+        document.getElementById("loading").classList.add("hidden");
+        document.getElementById("results").classList.remove("hidden");
+
+        displayResults(data);
+
+      } catch (error) {
+        document.getElementById("loading").classList.add("hidden");
+        alert("Something went wrong. Is Flask running?");
+      }
+    }
+
+    function displayResults(data) {
+      const summary = document.getElementById("summary");
+      const alertList = document.getElementById("alertList");
+
+      // Clear old results
+      alertList.innerHTML = "";
+
+      // Summary bar — green if clean, red if threats found
+      if (data.alerts_found === 0) {
+        summary.className = "rounded-xl p-4 mb-6 text-center font-semibold text-lg bg-green-900 text-green-300";
+        summary.textContent = "✅ No suspicious activity detected";
+      } else {
+        summary.className = "rounded-xl p-4 mb-6 text-center font-semibold text-lg bg-red-900 text-red-300";
+        summary.textContent = `🚨 ${data.alerts_found} threat${data.alerts_found > 1 ? "s" : ""} detected in ${data.filename}`;
+      }
+
+      // Render each alert as a card
+      data.alerts.forEach(alert => {
+        const card = document.createElement("div");
+        card.className = "bg-gray-900 border border-red-800 rounded-xl p-5";
+        card.innerHTML = `
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-red-400 font-bold text-sm uppercase tracking-wide">${alert.type}</span>
+            <span class="bg-red-900 text-red-300 text-xs font-semibold px-3 py-1 rounded-full">Suspicious</span>
+          </div>
+          <p class="text-white font-mono text-sm mb-1">IP: ${alert.ip}</p>
+          <p class="text-gray-400 text-sm">${alert.detail}</p>
+        `;
+        alertList.appendChild(card);
+      });
+    }
+  </script>
+
+</body>
+</html>
