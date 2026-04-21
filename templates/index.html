@@ -107,16 +107,29 @@
       }
 
       // Render each alert as a card
-      data.alerts.forEach(alert => {
+data.alerts.forEach(alert => {
+        const isHigh = alert.severity === "high";
         const card = document.createElement("div");
-        card.className = "bg-gray-900 border border-red-800 rounded-xl p-5";
+        card.className = `bg-gray-900 border ${isHigh ? "border-red-800" : "border-yellow-800"} rounded-xl p-5`;
         card.innerHTML = `
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-red-400 font-bold text-sm uppercase tracking-wide">${alert.type}</span>
-            <span class="bg-red-900 text-red-300 text-xs font-semibold px-3 py-1 rounded-full">Suspicious</span>
+          <div class="flex items-center justify-between mb-3">
+            <span class="${isHigh ? "text-red-400" : "text-yellow-400"} font-bold text-sm uppercase tracking-wide">
+              ${isHigh ? "🚨" : "⚠️"} ${alert.type}
+            </span>
+            <span class="${isHigh ? "bg-red-900 text-red-300" : "bg-yellow-900 text-yellow-300"} text-xs font-semibold px-3 py-1 rounded-full">
+              ${isHigh ? "High Risk" : "Medium Risk"}
+            </span>
           </div>
-          <p class="text-white font-mono text-sm mb-1">IP: ${alert.ip}</p>
-          <p class="text-gray-400 text-sm">${alert.detail}</p>
+          <p class="text-white text-sm mb-3">${alert.detail}</p>
+          <div class="bg-gray-800 rounded-lg p-3 mb-3">
+            <p class="text-gray-400 text-xs font-mono">Source IP: ${alert.ip}</p>
+          </div>
+          <div class="${isHigh ? "bg-red-950 border border-red-900" : "bg-yellow-950 border border-yellow-900"} rounded-lg p-3">
+            <p class="text-xs font-semibold ${isHigh ? "text-red-300" : "text-yellow-300"}">
+              💡 Recommended Action
+            </p>
+            <p class="text-xs ${isHigh ? "text-red-200" : "text-yellow-200"} mt-1">${alert.action}</p>
+          </div>
         `;
         alertList.appendChild(card);
       });

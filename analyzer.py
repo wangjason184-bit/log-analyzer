@@ -48,17 +48,21 @@ def analyze_log(filepath):
     for ip, count in failed_logins.items():
         if count >= FAILED_LOGIN_THRESHOLD:
             alerts.append({
-                "type": "Brute Force",
+                "type": "Brute Force Attack",
                 "ip": ip,
-                "detail": f"{count} failed login attempts"
+                "severity": "high",
+                "detail": f"A suspicious computer tried to log in to your website {count} times in a short period. This is a classic sign of someone trying to guess your password.",
+                "action": "Consider blocking this IP address immediately."
             })
 
     for ip, count in request_counts.items():
         if count >= REQUEST_SPAM_THRESHOLD:
             alerts.append({
-                "type": "Request Spam",
+                "type": "Unusual Traffic Spike",
                 "ip": ip,
-                "detail": f"{count} requests detected"
+                "severity": "medium",
+                "detail": f"A single computer sent {count} requests to your website. This could be someone trying to slow down or crash your site.",
+                "action": "Monitor this IP and consider rate limiting."
             })
 
     return alerts
