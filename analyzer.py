@@ -3,10 +3,11 @@ from collections import defaultdict
 from datetime import datetime
 
 # ── Thresholds ────────────────────────────────────────────────
-BRUTE_FORCE_THRESHOLD = 5      # failed logins within the window
-BRUTE_FORCE_WINDOW    = 60     # seconds - 5 failures in 60s = attack
-RATE_SPIKE_THRESHOLD  = 50     # requests within the window
-RATE_SPIKE_WINDOW     = 10     # seconds - 50 requests in 10s = spike
+BRUTE_FORCE_THRESHOLD = 5
+BRUTE_FORCE_WINDOW    = 60     # seconds
+RATE_SPIKE_THRESHOLD  = 50
+RATE_SPIKE_WINDOW     = 10     # seconds
+MAX_EVIDENCE_LINES    = 5      # how many raw lines to show per alert
 
 # ── Patterns ──────────────────────────────────────────────────
 NGINX_PATTERN = re.compile(
@@ -17,15 +18,13 @@ NGINX_PATTERN = re.compile(
 )
 
 TIMESTAMP_FORMAT = "%d/%b/%Y:%H:%M:%S %z"
-
-FAILED_STATUS_CODES = {"401", "403"}
+FAILED_STATUS_CODES  = {"401", "403"}
+SUCCESS_STATUS_CODES = {"200", "302"}
 LOGIN_PATHS = ["/login", "/admin", "/wp-login.php",
                "/signin", "/auth", "/account"]
-SUCCESS_STATUS_CODES = {"200", "302"}
 
 
 def parse_timestamp(raw):
-    """Convert log timestamp string to a Python datetime object."""
     try:
         return datetime.strptime(raw, TIMESTAMP_FORMAT)
     except ValueError:
@@ -33,144 +32,127 @@ def parse_timestamp(raw):
 
 
 def parse_line(line):
-    """
-    Try to parse a log line as nginx/Apache format.
-    Returns a dict with ip, timestamp, method, path, status
-    or None if the line doesn't match.
-    """
     match = NGINX_PATTERN.search(line)
     if not match:
         return None
-
     data = match.groupdict()
     data["timestamp"] = parse_timestamp(data["timestamp"])
+    data["raw"] = line.strip()  # ← store the original line
     return data
 
 
 def detect_brute_force(events):
     """
-    events: list of (timestamp, status, path) per IP
-
-    Logic:
-    - Walk through events in time order
-    - Count consecutive failures on login paths
-    - Reset counter if a SUCCESS is seen on a login path
-    - Flag if BRUTE_FORCE_THRESHOLD failures occur
-      within BRUTE_FORCE_WINDOW seconds
+    events: dict of ip -> list of (timestamp, status, path, raw_line)
+    Returns alerts with evidence lines attached.
     """
     alerts = []
 
     for ip, ip_events in events.items():
-        # Sort by timestamp, skip events with no timestamp
-        timed = [(ts, st, path) for ts, st, path in ip_events if ts]
+        timed = [(ts, st, path, raw)
+                 for ts, st, path, raw in ip_events if ts]
         timed.sort(key=lambda x: x[0])
 
-        # Sliding window of failure timestamps
-        failure_times = []
+        failure_window = []  # list of (timestamp, raw_line)
 
-        for ts, status, path in timed:
+        for ts, status, path, raw in timed:
             is_login_path = any(p in path for p in LOGIN_PATHS)
-
             if not is_login_path:
                 continue
 
-            # Success on a login page → reset the failure window
+            # Success resets the window
             if status in SUCCESS_STATUS_CODES:
-                failure_times = []
+                failure_window = []
                 continue
 
-            # Failed login attempt
             if status in FAILED_STATUS_CODES:
-                failure_times.append(ts)
+                failure_window.append((ts, raw))
 
-                # Drop failures outside the time window
-                failure_times = [
-                    t for t in failure_times
+                # Drop events outside the time window
+                failure_window = [
+                    (t, r) for t, r in failure_window
                     if (ts - t).total_seconds() <= BRUTE_FORCE_WINDOW
                 ]
 
-                # Check if threshold is hit
-                if len(failure_times) >= BRUTE_FORCE_THRESHOLD:
+                if len(failure_window) >= BRUTE_FORCE_THRESHOLD:
+                    # Grab up to MAX_EVIDENCE_LINES raw lines
+                    evidence = [r for _, r in
+                                failure_window[:MAX_EVIDENCE_LINES]]
                     alerts.append({
                         "type": "Brute Force Attack",
                         "ip": ip,
                         "severity": "high",
-                        "count": len(failure_times),
+                        "count": len(failure_window),
                         "window_seconds": BRUTE_FORCE_WINDOW,
                         "detail": (
-                            f"This IP made {len(failure_times)} failed login "
-                            f"attempts within {BRUTE_FORCE_WINDOW} seconds. "
-                            f"Logins reset on success so these are genuine "
-                            f"repeated failures — classic brute force pattern."
+                            f"This IP made {len(failure_window)} failed "
+                            f"login attempts within {BRUTE_FORCE_WINDOW} "
+                            f"seconds. Logins reset on success so these "
+                            f"are genuine repeated failures."
                         ),
-                        "action": "Block this IP immediately."
+                        "action": "Block this IP immediately.",
+                        "evidence": evidence  # ← real log lines
                     })
-                    break  # one alert per IP is enough
+                    break
 
     return alerts
 
 
 def detect_rate_spike(events):
     """
-    events: list of (timestamp,) per IP
-
-    Logic:
-    - Sliding window over all requests (not just login paths)
-    - If any window of RATE_SPIKE_WINDOW seconds contains
-      >= RATE_SPIKE_THRESHOLD requests → flag it
+    events: dict of ip -> list of (timestamp, raw_line)
     """
     alerts = []
 
-    for ip, timestamps in events.items():
-        timed = sorted([t for t in timestamps if t])
+    for ip, ip_events in events.items():
+        timed = sorted(
+            [(t, r) for t, r in ip_events if t],
+            key=lambda x: x[0]
+        )
 
-        window = []
-        peak = 0
+        window = []  # list of (timestamp, raw_line)
+        peak_window = []
 
-        for ts in timed:
-            window.append(ts)
+        for ts, raw in timed:
+            window.append((ts, raw))
 
-            # Drop requests outside the window
             window = [
-                t for t in window
+                (t, r) for t, r in window
                 if (ts - t).total_seconds() <= RATE_SPIKE_WINDOW
             ]
 
-            peak = max(peak, len(window))
+            if len(window) > len(peak_window):
+                peak_window = list(window)
 
             if len(window) >= RATE_SPIKE_THRESHOLD:
+                evidence = [r for _, r in
+                            peak_window[:MAX_EVIDENCE_LINES]]
                 alerts.append({
                     "type": "Request Rate Spike",
                     "ip": ip,
                     "severity": "medium",
-                    "count": peak,
+                    "count": len(peak_window),
                     "window_seconds": RATE_SPIKE_WINDOW,
                     "detail": (
-                        f"This IP sent {peak} requests in under "
-                        f"{RATE_SPIKE_WINDOW} seconds. Normal browsers "
-                        f"don't do this — it looks like automated "
-                        f"scanning or a denial-of-service attempt."
+                        f"This IP sent {len(peak_window)} requests in "
+                        f"under {RATE_SPIKE_WINDOW} seconds. Normal "
+                        f"browsers don't do this — looks like automated "
+                        f"scanning or denial-of-service."
                     ),
-                    "action": "Consider rate limiting or blocking this IP."
+                    "action": "Consider rate limiting or blocking this IP.",
+                    "evidence": evidence  # ← real log lines
                 })
-                break  # one alert per IP
+                break
 
     return alerts
 
 
 def analyze_log(filepath):
-    """
-    Main entry point.
-    Reads a log file, parses each line, runs detectors,
-    returns a list of alert dicts.
-    """
-    # Per-IP event log: (timestamp, status, path)
-    login_events   = defaultdict(list)  # for brute force
-    request_events = defaultdict(list)  # for rate spike
+    login_events   = defaultdict(list)
+    request_events = defaultdict(list)
 
-    unparsed_lines     = 0
-    total_lines        = 0
-    no_timestamp_lines = 0
+    total_lines    = 0
+    unparsed_lines = 0
 
     with open(filepath, "r", errors="ignore") as f:
         for line in f:
@@ -182,39 +164,31 @@ def analyze_log(filepath):
             parsed = parse_line(line)
 
             if parsed:
-                ip        = parsed["ip"]
-                ts        = parsed["timestamp"]
-                status    = parsed["status"]
-                path      = parsed["path"].lower()
+                ip     = parsed["ip"]
+                ts     = parsed["timestamp"]
+                status = parsed["status"]
+                path   = parsed["path"].lower()
+                raw    = parsed["raw"]
 
-                if ts is None:
-                    no_timestamp_lines += 1
-
-                login_events[ip].append((ts, status, path))
-                request_events[ip].append(ts)
-
+                login_events[ip].append((ts, status, path, raw))
+                request_events[ip].append((ts, raw))
             else:
                 unparsed_lines += 1
-                # Fallback: plain text log (no timestamp → weaker detection)
                 ip = _extract_ip(line)
                 if ip and _is_failed_login(line):
-                    login_events[ip].append((None, "401", "/login"))
+                    login_events[ip].append((None, "401", "/login", line.strip()))
 
     alerts = []
     alerts += detect_brute_force(login_events)
     alerts += detect_rate_spike(request_events)
 
-    # Attach metadata so the frontend can show scan stats
     meta = {
         "total_lines": total_lines,
         "unparsed_lines": unparsed_lines,
-        "no_timestamp_lines": no_timestamp_lines,
     }
 
     return alerts, meta
 
-
-# ── Fallback helpers for plain-text logs ──────────────────────
 
 def _extract_ip(line):
     match = re.search(r'\b(\d{1,3}\.){3}\d{1,3}\b', line)
