@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify, render_template  # added render_template
+from flask import Flask, request, jsonify, render_template
 from analyzer import analyze_log
 
 app = Flask(__name__)
@@ -13,7 +13,7 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 @app.route("/")
 def index():
-    return render_template("index.html")  # now serves the HTML page
+    return render_template("index.html")
 
 
 @app.route("/upload", methods=["POST"])
@@ -29,13 +29,14 @@ def upload_log():
     filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
     file.save(filepath)
 
-    alerts = analyze_log(filepath)
+    alerts, meta = analyze_log(filepath)
 
     return jsonify({
         "message": "File uploaded and analyzed",
         "filename": file.filename,
         "alerts_found": len(alerts),
-        "alerts": alerts
+        "alerts": alerts,
+        "meta": meta
     }), 200
 
 
